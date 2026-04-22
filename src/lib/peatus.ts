@@ -143,6 +143,14 @@ function fmtTime(d: Date): string {
   return `${h}:${m}`
 }
 
+/** Nudge a coord by small offsets — 0 ≈ exact, 1 ≈ 22 m, 2 ≈ 55 m, 3 ≈ 110 m. */
+const NUDGE_OFFSETS: Array<[number, number]> = [
+  [0, 0],
+  [0.0002, 0], [-0.0002, 0], [0, 0.0002], [0, -0.0002],
+  [0.0005, 0], [-0.0005, 0], [0, 0.0005], [0, -0.0005],
+  [0.001, 0], [-0.001, 0], [0, 0.001], [0, -0.001],
+]
+
 export async function planJourney(
   from: { lat: number; lng: number },
   to: { lat: number; lng: number },
@@ -156,41 +164,57 @@ export async function planJourney(
   // Over-fetch for transit because the client-side agency whitelist may drop
   // some itineraries where OTP returned non-TLT alternatives despite the ban.
   const serverRequest = profile === 'transit' ? Math.max(8, wanted * 3) : wanted
-  const variables = {
-    from: { lat: from.lat, lon: from.lng },
-    to: { lat: to.lat, lon: to.lng },
-    numItineraries: serverRequest,
-    date: fmtDate(when),
-    time: fmtTime(when),
-    arriveBy: !!opts.arriveBy,
-    modes: opts.modes ?? PROFILE_MODES[profile],
-    banned: bannedAgencies ? { agencies: bannedAgencies } : null,
+
+  // OTP is finicky about whether an exact coord snaps to the OSM walkable
+  // graph — a GPS reading 30 m inside a building can return 0 itineraries
+  // while the same coord 20 m away works. Try small offsets until we land on
+  // a routable point.
+  let lastItineraries: Itinerary[] = []
+  for (const [dLat, dLng] of NUDGE_OFFSETS) {
+    const variables = {
+      from: { lat: from.lat + dLat, lon: from.lng + dLng },
+      to: { lat: to.lat, lon: to.lng },
+      numItineraries: serverRequest,
+      date: fmtDate(when),
+      time: fmtTime(when),
+      arriveBy: !!opts.arriveBy,
+      modes: opts.modes ?? PROFILE_MODES[profile],
+      banned: bannedAgencies ? { agencies: bannedAgencies } : null,
+    }
+    const res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: PLAN_QUERY, variables }),
+      signal: opts.signal,
+    })
+    if (!res.ok) throw new Error(`peatus: HTTP ${res.status}`)
+    const data = (await res.json()) as {
+      data?: { plan?: { itineraries?: Itinerary[] } }
+      errors?: { message?: string }[]
+    }
+    if (data.errors?.length) throw new Error(data.errors[0]?.message ?? 'GraphQL error')
+    const all = data.data?.plan?.itineraries ?? []
+    if (all.length === 0) continue // try next nudge
+
+    // Non-transit profiles pass through unfiltered.
+    if (profile !== 'transit') return all.slice(0, wanted)
+
+    // OTP's banned.agencies isn't a hard filter; enforce the whitelist client-side.
+    const allowed = new Set(ALLOWED_AGENCY_IDS)
+    const filtered = all.filter((it) =>
+      it.legs.every((l) => {
+        if (l.mode === 'WALK') return true
+        const gid = l.route?.agency?.gtfsId
+        return !!gid && allowed.has(gid)
+      }),
+    )
+    if (filtered.length > 0) return filtered.slice(0, wanted)
+
+    // OTP returned itineraries but all were non-TLT. Remember as fallback and
+    // try next nudge before giving up.
+    if (lastItineraries.length === 0) lastItineraries = filtered
   }
-  const res = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: PLAN_QUERY, variables }),
-    signal: opts.signal,
-  })
-  if (!res.ok) throw new Error(`peatus: HTTP ${res.status}`)
-  const data = (await res.json()) as {
-    data?: { plan?: { itineraries?: Itinerary[] } }
-    errors?: { message?: string }[]
-  }
-  if (data.errors?.length) throw new Error(data.errors[0]?.message ?? 'GraphQL error')
-  const all = data.data?.plan?.itineraries ?? []
-  // OTP's banned.agencies isn't a hard filter; it ranks those lower but still
-  // returns some of them. Enforce the whitelist client-side for transit plans.
-  if (profile !== 'transit') return all
-  const allowed = new Set(ALLOWED_AGENCY_IDS)
-  const filtered = all.filter((it) =>
-    it.legs.every((l) => {
-      if (l.mode === 'WALK') return true
-      const gid = l.route?.agency?.gtfsId
-      return !!gid && allowed.has(gid)
-    }),
-  )
-  return filtered.slice(0, wanted)
+  return lastItineraries
 }
 
 /** Short preview of an itinerary — e.g. "Bus 27 · 23 min". */
