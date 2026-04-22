@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { nearestLocation } from '@/lib/geo'
 
 export type Location = {
   id: string
@@ -8,6 +9,11 @@ export type Location = {
   lng: number
   icon?: string
 }
+
+export type DetectResult =
+  | { kind: 'matched'; locationId: string; distance: number; accuracy: number }
+  | { kind: 'no-match'; distance: number | null; accuracy: number }
+  | { kind: 'error'; message: string }
 
 const uid = () =>
   (typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -19,6 +25,11 @@ export const useLocationsStore = defineStore(
   () => {
     const locations = ref<Location[]>([])
     const currentId = ref<string | null>(null)
+    const autoDetect = ref(true)
+    const radiusMeters = ref(150)
+    const manualOverride = ref(false)
+    const lastFix = ref<{ lat: number; lng: number; accuracy: number; at: number } | null>(null)
+    const lastDetect = ref<DetectResult | null>(null)
 
     const current = computed(() =>
       currentId.value ? locations.value.find((l) => l.id === currentId.value) ?? null : null,
@@ -41,29 +52,102 @@ export const useLocationsStore = defineStore(
       if (currentId.value === id) currentId.value = null
     }
 
+    /** Manually set current (also flips `manualOverride` so auto-detect doesn't stomp it). */
     function setCurrent(id: string | null) {
       currentId.value = id
+      manualOverride.value = id !== null
     }
 
-    async function captureGps(): Promise<{ lat: number; lng: number }> {
+    function clearOverride() {
+      manualOverride.value = false
+    }
+
+    async function captureGps(): Promise<{ lat: number; lng: number; accuracy: number }> {
       if (!('geolocation' in navigator)) {
         throw new Error('Geolocation not supported in this browser')
       }
       return await new Promise((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(
-          (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+          (pos) =>
+            resolve({
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              accuracy: pos.coords.accuracy,
+            }),
           (err) => reject(new Error(err.message)),
           { enableHighAccuracy: true, timeout: 10_000, maximumAge: 0 },
         )
       })
     }
 
-    return { locations, currentId, current, add, update, remove, setCurrent, captureGps }
+    /** Read GPS and match to the nearest configured location within radius. */
+    async function detectCurrent(): Promise<DetectResult> {
+      try {
+        const fix = await captureGps()
+        lastFix.value = { ...fix, at: Date.now() }
+
+        if (locations.value.length === 0) {
+          const r: DetectResult = { kind: 'no-match', distance: null, accuracy: fix.accuracy }
+          lastDetect.value = r
+          return r
+        }
+
+        const match = nearestLocation(fix, locations.value, radiusMeters.value)
+        if (match) {
+          if (!manualOverride.value) currentId.value = match.location.id
+          const r: DetectResult = {
+            kind: 'matched',
+            locationId: match.location.id,
+            distance: match.distance,
+            accuracy: fix.accuracy,
+          }
+          lastDetect.value = r
+          return r
+        }
+
+        // Find nearest regardless of radius so we can report the gap
+        const wider = nearestLocation(fix, locations.value, Infinity)
+        if (!manualOverride.value) currentId.value = null
+        const r: DetectResult = {
+          kind: 'no-match',
+          distance: wider?.distance ?? null,
+          accuracy: fix.accuracy,
+        }
+        lastDetect.value = r
+        return r
+      } catch (e) {
+        const r: DetectResult = {
+          kind: 'error',
+          message: e instanceof Error ? e.message : String(e),
+        }
+        lastDetect.value = r
+        return r
+      }
+    }
+
+    return {
+      locations,
+      currentId,
+      current,
+      autoDetect,
+      radiusMeters,
+      manualOverride,
+      lastFix,
+      lastDetect,
+      add,
+      update,
+      remove,
+      setCurrent,
+      clearOverride,
+      captureGps,
+      detectCurrent,
+    }
   },
   {
     persist: {
       key: 'mobiledashboard.locations',
       storage: localStorage,
+      pick: ['locations', 'currentId', 'autoDetect', 'radiusMeters', 'manualOverride'],
     },
   },
 )

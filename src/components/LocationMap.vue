@@ -6,7 +6,11 @@ import markerIcon2xUrl from 'leaflet/dist/images/marker-icon-2x.png'
 import markerShadowUrl from 'leaflet/dist/images/marker-shadow.png'
 import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 
-// Vite-friendly marker asset paths
+// Vite-friendly marker asset paths.
+// Without deleting _getIconUrl, dev mode falls back to CSS-relative paths and
+// default markers silently fail to load.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+delete (L.Icon.Default.prototype as any)._getIconUrl
 L.Icon.Default.mergeOptions({
   iconUrl: markerIconUrl,
   iconRetinaUrl: markerIcon2xUrl,

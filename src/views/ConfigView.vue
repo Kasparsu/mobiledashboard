@@ -8,7 +8,7 @@ import IconPicker from '@/components/IconPicker.vue'
 import { reverseGeocode, shortAddress, type NominatimPlace } from '@/lib/nominatim'
 
 const locations = useLocationsStore()
-const { locations: list, currentId } = storeToRefs(locations)
+const { locations: list, currentId, autoDetect, radiusMeters } = storeToRefs(locations)
 
 type Draft = {
   id: string | null
@@ -171,6 +171,42 @@ function confirmDelete(loc: Location) {
     <header class="flex items-center justify-between">
       <h1 class="text-2xl font-bold">Config</h1>
     </header>
+
+    <div class="card bg-base-200">
+      <div class="card-body p-4 gap-3">
+        <h2 class="text-lg font-semibold">Auto-detect</h2>
+        <label class="label cursor-pointer justify-start gap-3 p-0">
+          <input
+            v-model="autoDetect"
+            type="checkbox"
+            class="toggle toggle-primary"
+          />
+          <span class="label-text">
+            Detect current location from GPS
+            <span class="block text-xs text-base-content/60">
+              Matches your device position against saved locations.
+            </span>
+          </span>
+        </label>
+        <label class="form-control">
+          <span class="label-text">
+            Match radius: <span class="font-mono">{{ radiusMeters }} m</span>
+          </span>
+          <input
+            v-model.number="radiusMeters"
+            type="range"
+            min="50"
+            max="500"
+            step="10"
+            class="range range-primary range-sm"
+          />
+          <div class="flex justify-between text-xs text-base-content/60 px-1">
+            <span>50 m</span>
+            <span>500 m</span>
+          </div>
+        </label>
+      </div>
+    </div>
 
     <div class="space-y-2">
       <div class="flex items-center justify-between">
