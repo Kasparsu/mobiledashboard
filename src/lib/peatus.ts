@@ -6,6 +6,11 @@
 
 const ENDPOINT = 'https://api.peatus.ee/routing/v1/routers/estonia/index/graphql'
 
+/** The only operator we route through — Aktsiaselts Tallinna Linnatransport.
+ *  All other agencies (HANSABUSS AS, GoBus, regional ops, intercity, ELRON, ferries...)
+ *  are banned server-side so OTP won't suggest them. */
+export const ALLOWED_AGENCY_IDS = ['estonia:tallinn_10312960']
+
 export type Leg = {
   mode: string
   startTime: number
@@ -58,6 +63,7 @@ query plan(
   $time: String
   $arriveBy: Boolean
   $modes: String
+  $banned: InputBanned
 ) {
   plan(
     from: $from
@@ -67,6 +73,7 @@ query plan(
     time: $time
     arriveBy: $arriveBy
     modes: $modes
+    banned: $banned
   ) {
     itineraries {
       startTime
@@ -81,13 +88,43 @@ query plan(
         distance
         from { name lat lon }
         to { name lat lon }
-        route { shortName longName mode }
+        route { shortName longName mode agency { gtfsId name } }
         trip { tripHeadsign }
       }
     }
   }
 }
 `.trim()
+
+const AGENCIES_QUERY = '{ agencies { gtfsId name } }'
+
+let bannedAgencyIdsPromise: Promise<string> | null = null
+
+async function getBannedAgencyIds(): Promise<string> {
+  if (bannedAgencyIdsPromise) return bannedAgencyIdsPromise
+  bannedAgencyIdsPromise = (async () => {
+    try {
+      const res = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: AGENCIES_QUERY }),
+      })
+      if (!res.ok) return ''
+      const data = (await res.json()) as {
+        data?: { agencies?: Array<{ gtfsId: string }> }
+      }
+      const all = data.data?.agencies ?? []
+      const allow = new Set(ALLOWED_AGENCY_IDS)
+      return all
+        .map((a) => a.gtfsId)
+        .filter((id) => !allow.has(id))
+        .join(',')
+    } catch {
+      return ''
+    }
+  })()
+  return bannedAgencyIdsPromise
+}
 
 function fmtDate(d: Date): string {
   const y = d.getFullYear()
@@ -107,6 +144,9 @@ export async function planJourney(
   opts: PlanOptions = {},
 ): Promise<Itinerary[]> {
   const when = opts.arriveBy ?? opts.departAt ?? new Date()
+  const profile = opts.profile ?? 'transit'
+  // Only ban other agencies when we actually use transit. Bike/walk plans don't need it.
+  const bannedAgencies = profile === 'transit' ? await getBannedAgencyIds() : ''
   const variables = {
     from: { lat: from.lat, lon: from.lng },
     to: { lat: to.lat, lon: to.lng },
@@ -114,7 +154,8 @@ export async function planJourney(
     date: fmtDate(when),
     time: fmtTime(when),
     arriveBy: !!opts.arriveBy,
-    modes: opts.modes ?? PROFILE_MODES[opts.profile ?? 'transit'],
+    modes: opts.modes ?? PROFILE_MODES[profile],
+    banned: bannedAgencies ? { agencies: bannedAgencies } : null,
   }
   const res = await fetch(ENDPOINT, {
     method: 'POST',

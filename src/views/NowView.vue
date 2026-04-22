@@ -4,14 +4,20 @@ import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
 import { useLocationsStore } from '@/stores/locations'
 import { useCommuteStore } from '@/stores/commute'
+import { useScheduleStore } from '@/stores/schedule'
 import LocationMap from '@/components/LocationMap.vue'
 import RouteCard from '@/components/RouteCard.vue'
+import NextLessonCard from '@/components/NextLessonCard.vue'
 
 const locations = useLocationsStore()
 const { locations: list, current, autoDetect, lastDetect, manualOverride } = storeToRefs(locations)
 
 const commute = useCommuteStore()
 const { profile } = storeToRefs(commute)
+
+const schedule = useScheduleStore()
+// Load schedule on mount / target change.
+if (schedule.target) void schedule.load()
 
 const detecting = ref(false)
 
@@ -118,6 +124,8 @@ const destinations = computed(() =>
         </button>
       </div>
     </header>
+
+    <NextLessonCard />
 
     <LocationMap
       v-if="markers.length"

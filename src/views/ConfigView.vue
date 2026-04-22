@@ -3,12 +3,27 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
 import { useLocationsStore, type Location } from '@/stores/locations'
+import { useScheduleStore } from '@/stores/schedule'
 import LocationMap from '@/components/LocationMap.vue'
 import IconPicker from '@/components/IconPicker.vue'
+import ScheduleTargetPicker from '@/components/ScheduleTargetPicker.vue'
 import { reverseGeocode, shortAddress, type NominatimPlace } from '@/lib/nominatim'
+import type { SearchResult } from '@/lib/tahvel'
 
 const locations = useLocationsStore()
 const { locations: list, currentId, autoDetect, radiusMeters } = storeToRefs(locations)
+const schedule = useScheduleStore()
+const { target: scheduleTarget } = storeToRefs(schedule)
+
+function onScheduleTargetPicked(item: SearchResult) {
+  schedule.setTarget(item)
+  void schedule.load(true)
+}
+
+function clearScheduleTarget() {
+  if (!confirm('Remove tracked schedule?')) return
+  schedule.setTarget(null)
+}
 
 type Draft = {
   id: string | null
@@ -172,6 +187,29 @@ function confirmDelete(loc: Location) {
     <header class="flex items-center justify-between">
       <h1 class="text-2xl font-bold">Config</h1>
     </header>
+
+    <div class="card bg-base-200">
+      <div class="card-body p-4 gap-3">
+        <h2 class="text-lg font-semibold">Schedule (Tahvel)</h2>
+        <div v-if="scheduleTarget" class="flex items-center gap-2">
+          <div class="flex-1 min-w-0">
+            <div class="font-medium truncate">{{ scheduleTarget.name }}</div>
+            <div class="text-xs text-base-content/60">{{ scheduleTarget.type }}</div>
+          </div>
+          <button
+            class="btn btn-sm btn-ghost text-error"
+            title="Remove"
+            @click="clearScheduleTarget"
+          >
+            Remove
+          </button>
+        </div>
+        <ScheduleTargetPicker v-else @pick="onScheduleTargetPicked" />
+        <p v-if="!scheduleTarget" class="text-xs text-base-content/60">
+          Search by name (e.g. your own name as a teacher, or a student group code). Results come from tahveltp.edu.ee (TTK).
+        </p>
+      </div>
+    </div>
 
     <div class="card bg-base-200">
       <div class="card-body p-4 gap-3">
