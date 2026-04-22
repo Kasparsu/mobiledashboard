@@ -19,7 +19,12 @@ export type Leg = {
   distance: number
   from: { name: string; lat: number; lon: number }
   to: { name: string; lat: number; lon: number }
-  route?: { shortName: string; longName?: string; mode: string } | null
+  route?: {
+    shortName: string
+    longName?: string
+    mode: string
+    agency?: { gtfsId: string; name: string } | null
+  } | null
   trip?: { tripHeadsign: string } | null
 }
 
@@ -147,10 +152,14 @@ export async function planJourney(
   const profile = opts.profile ?? 'transit'
   // Only ban other agencies when we actually use transit. Bike/walk plans don't need it.
   const bannedAgencies = profile === 'transit' ? await getBannedAgencyIds() : ''
+  const wanted = opts.numItineraries ?? 3
+  // Over-fetch for transit because the client-side agency whitelist may drop
+  // some itineraries where OTP returned non-TLT alternatives despite the ban.
+  const serverRequest = profile === 'transit' ? Math.max(8, wanted * 3) : wanted
   const variables = {
     from: { lat: from.lat, lon: from.lng },
     to: { lat: to.lat, lon: to.lng },
-    numItineraries: opts.numItineraries ?? 3,
+    numItineraries: serverRequest,
     date: fmtDate(when),
     time: fmtTime(when),
     arriveBy: !!opts.arriveBy,
@@ -169,7 +178,19 @@ export async function planJourney(
     errors?: { message?: string }[]
   }
   if (data.errors?.length) throw new Error(data.errors[0]?.message ?? 'GraphQL error')
-  return data.data?.plan?.itineraries ?? []
+  const all = data.data?.plan?.itineraries ?? []
+  // OTP's banned.agencies isn't a hard filter; it ranks those lower but still
+  // returns some of them. Enforce the whitelist client-side for transit plans.
+  if (profile !== 'transit') return all
+  const allowed = new Set(ALLOWED_AGENCY_IDS)
+  const filtered = all.filter((it) =>
+    it.legs.every((l) => {
+      if (l.mode === 'WALK') return true
+      const gid = l.route?.agency?.gtfsId
+      return !!gid && allowed.has(gid)
+    }),
+  )
+  return filtered.slice(0, wanted)
 }
 
 /** Short preview of an itinerary — e.g. "Bus 27 · 23 min". */
