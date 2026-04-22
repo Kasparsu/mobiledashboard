@@ -6,9 +6,8 @@ import markerIcon2xUrl from 'leaflet/dist/images/marker-icon-2x.png'
 import markerShadowUrl from 'leaflet/dist/images/marker-shadow.png'
 import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 
-// Vite-friendly marker asset paths.
-// Without deleting _getIconUrl, dev mode falls back to CSS-relative paths and
-// default markers silently fail to load.
+// Vite-friendly default marker asset paths. Drop _getIconUrl so merged options
+// actually win over CSS-relative fallbacks in dev.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 delete (L.Icon.Default.prototype as any)._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -22,7 +21,9 @@ export type MapMarker = {
   lat: number
   lng: number
   label?: string
-  current?: boolean
+  icon?: string     // Iconify name, e.g. "ph:house-bold"
+  current?: boolean // highlights with ring
+  pulse?: boolean   // live GPS dot (overrides icon-based rendering)
 }
 
 const props = withDefaults(
@@ -55,14 +56,53 @@ const mapEl = ref<HTMLDivElement | null>(null)
 const map = shallowRef<L.Map | null>(null)
 const markerLayer = shallowRef<L.LayerGroup | null>(null)
 
-function currentIcon() {
+function pulseIcon() {
   return L.divIcon({
-    className: 'current-marker',
+    className: 'map-pulse-marker',
     html:
-      '<span class="block w-4 h-4 rounded-full bg-primary ring-4 ring-primary/30 shadow-lg"></span>',
+      '<span class="relative flex h-4 w-4">' +
+      '<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/50"></span>' +
+      '<span class="relative inline-flex rounded-full h-4 w-4 bg-primary ring-2 ring-base-100 shadow-lg"></span>' +
+      '</span>',
     iconSize: [16, 16],
     iconAnchor: [8, 8],
   })
+}
+
+function iconBadge(icon: string, current: boolean) {
+  const ringClass = current
+    ? 'ring-4 ring-primary/40'
+    : 'ring-2 ring-base-300'
+  const bgClass = current ? 'bg-primary text-primary-content' : 'bg-base-100 text-base-content'
+  return L.divIcon({
+    className: 'map-icon-marker',
+    html:
+      `<span class="inline-flex items-center justify-center w-8 h-8 rounded-full shadow-lg ${bgClass} ${ringClass}">` +
+      `<iconify-icon icon="${icon}" width="20" height="20"></iconify-icon>` +
+      '</span>',
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+  })
+}
+
+function pinIcon(current: boolean) {
+  const ringClass = current ? 'ring-4 ring-primary/40' : 'ring-2 ring-base-300'
+  const bgClass = current ? 'bg-primary text-primary-content' : 'bg-base-100 text-base-content'
+  return L.divIcon({
+    className: 'map-pin-marker',
+    html:
+      `<span class="inline-flex items-center justify-center w-8 h-8 rounded-full shadow-lg ${bgClass} ${ringClass}">` +
+      '<iconify-icon icon="ph:map-pin-bold" width="20" height="20"></iconify-icon>' +
+      '</span>',
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+  })
+}
+
+function iconFor(m: MapMarker) {
+  if (m.pulse) return pulseIcon()
+  if (m.icon) return iconBadge(m.icon, !!m.current)
+  return pinIcon(!!m.current)
 }
 
 function render() {
@@ -72,10 +112,11 @@ function render() {
   for (const m of props.markers) {
     const latlng = L.latLng(m.lat, m.lng)
     bounds.push(latlng)
-    const marker = m.current
-      ? L.marker(latlng, { icon: currentIcon(), draggable: props.draggable })
-      : L.marker(latlng, { draggable: props.draggable })
-    if (m.label) marker.bindTooltip(m.label, { direction: 'top', offset: [0, -10] })
+    const marker = L.marker(latlng, {
+      icon: iconFor(m),
+      draggable: props.draggable,
+    })
+    if (m.label) marker.bindTooltip(m.label, { direction: 'top', offset: [0, -18] })
     if (props.draggable) {
       marker.on('dragend', (e) => {
         const p = e.target.getLatLng()
@@ -91,7 +132,7 @@ function render() {
 
 onMounted(() => {
   if (!mapEl.value) return
-  const center = props.center ?? { lat: 59.437, lng: 24.7536 } // Tallinn fallback
+  const center = props.center ?? { lat: 59.437, lng: 24.7536 }
   const m = L.map(mapEl.value, { attributionControl: false }).setView(
     [center.lat, center.lng],
     props.zoom,

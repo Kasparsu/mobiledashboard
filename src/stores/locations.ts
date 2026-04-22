@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { nearestLocation } from '@/lib/geo'
+import { useHistoryStore } from './history'
 
 export type Location = {
   id: string
@@ -84,15 +85,28 @@ export const useLocationsStore = defineStore(
     async function detectCurrent(): Promise<DetectResult> {
       try {
         const fix = await captureGps()
-        lastFix.value = { ...fix, at: Date.now() }
+        const at = Date.now()
+        lastFix.value = { ...fix, at }
+
+        const history = useHistoryStore()
 
         if (locations.value.length === 0) {
           const r: DetectResult = { kind: 'no-match', distance: null, accuracy: fix.accuracy }
           lastDetect.value = r
+          history.append({
+            at,
+            lat: fix.lat,
+            lng: fix.lng,
+            accuracy: fix.accuracy,
+            matchedLocationId: null,
+            distanceToMatch: null,
+          })
           return r
         }
 
         const match = nearestLocation(fix, locations.value, radiusMeters.value)
+        const wider = nearestLocation(fix, locations.value, Infinity)
+
         if (match) {
           if (!manualOverride.value) currentId.value = match.location.id
           const r: DetectResult = {
@@ -102,11 +116,17 @@ export const useLocationsStore = defineStore(
             accuracy: fix.accuracy,
           }
           lastDetect.value = r
+          history.append({
+            at,
+            lat: fix.lat,
+            lng: fix.lng,
+            accuracy: fix.accuracy,
+            matchedLocationId: match.location.id,
+            distanceToMatch: match.distance,
+          })
           return r
         }
 
-        // Find nearest regardless of radius so we can report the gap
-        const wider = nearestLocation(fix, locations.value, Infinity)
         if (!manualOverride.value) currentId.value = null
         const r: DetectResult = {
           kind: 'no-match',
@@ -114,6 +134,14 @@ export const useLocationsStore = defineStore(
           accuracy: fix.accuracy,
         }
         lastDetect.value = r
+        history.append({
+          at,
+          lat: fix.lat,
+          lng: fix.lng,
+          accuracy: fix.accuracy,
+          matchedLocationId: null,
+          distanceToMatch: wider?.distance ?? null,
+        })
         return r
       } catch (e) {
         const r: DetectResult = {

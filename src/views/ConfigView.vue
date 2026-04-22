@@ -42,6 +42,7 @@ const draftMarkers = computed(() =>
           lat: draftLat.value,
           lng: draftLng.value,
           label: draft.value.name || 'New location',
+          icon: draft.value.icon || undefined,
           current: true,
         },
       ]

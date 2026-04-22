@@ -10,6 +10,11 @@ const router = createRouter({
       component: NowView,
     },
     {
+      path: '/stats',
+      name: 'stats',
+      component: () => import('../views/StatsView.vue'),
+    },
+    {
       path: '/config',
       name: 'config',
       component: () => import('../views/ConfigView.vue'),

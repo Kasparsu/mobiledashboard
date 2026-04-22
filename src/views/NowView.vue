@@ -1,15 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
 import { useLocationsStore } from '@/stores/locations'
+import { useCommuteStore } from '@/stores/commute'
 import LocationMap from '@/components/LocationMap.vue'
+import RouteCard from '@/components/RouteCard.vue'
 
 const locations = useLocationsStore()
 const { locations: list, current, autoDetect, lastDetect, manualOverride } = storeToRefs(locations)
 
+const commute = useCommuteStore()
+const { profile } = storeToRefs(commute)
+
 const detecting = ref(false)
-let refreshTimer: number | null = null
 
 async function refresh() {
   if (detecting.value) return
@@ -21,35 +25,15 @@ async function refresh() {
   }
 }
 
-function onVisibilityChange() {
-  if (document.visibilityState === 'visible' && autoDetect.value) refresh()
-}
-
-onMounted(() => {
-  if (autoDetect.value && list.value.length > 0) refresh()
-  document.addEventListener('visibilitychange', onVisibilityChange)
-  // Re-detect every 5 minutes while visible
-  refreshTimer = window.setInterval(
-    () => {
-      if (document.visibilityState === 'visible' && autoDetect.value) refresh()
-    },
-    5 * 60 * 1000,
-  )
-})
-
-onUnmounted(() => {
-  document.removeEventListener('visibilitychange', onVisibilityChange)
-  if (refreshTimer) window.clearInterval(refreshTimer)
-})
-
 const markers = computed(() => {
   const fix = locations.lastFix
-  const base = list.value.map((l) => ({
+  const base: import('@/components/LocationMap.vue').MapMarker[] = list.value.map((l) => ({
     id: l.id,
     lat: l.lat,
     lng: l.lng,
     label: l.name,
-    current: false,
+    icon: l.icon,
+    current: l.id === current.value?.id,
   }))
   if (fix) {
     base.push({
@@ -57,7 +41,7 @@ const markers = computed(() => {
       lat: fix.lat,
       lng: fix.lng,
       label: 'You',
-      current: true,
+      pulse: true,
     })
   }
   return base
@@ -88,6 +72,27 @@ const statusLine = computed(() => {
   }
   return ''
 })
+
+// Pick an origin for routing: matched location if present, otherwise the raw
+// GPS fix as a synthetic "You" location. Cache key rounds coords to ~100 m so
+// we re-plan when the user actually moves, not on every fix jitter.
+const fromNode = computed(() => {
+  if (current.value) return current.value
+  const fix = locations.lastFix
+  if (!fix) return null
+  const latR = fix.lat.toFixed(3)
+  const lngR = fix.lng.toFixed(3)
+  return {
+    id: `__gps__:${latR},${lngR}`,
+    name: 'Current position',
+    lat: fix.lat,
+    lng: fix.lng,
+  }
+})
+
+const destinations = computed(() =>
+  fromNode.value ? list.value.filter((l) => l.id !== fromNode.value!.id) : [],
+)
 </script>
 
 <template>
@@ -144,10 +149,45 @@ const statusLine = computed(() => {
             Release
           </button>
         </div>
-        <p v-if="current" class="text-base-content/60 text-sm">
-          Schedule &amp; commute insights will appear here once wired up.
-        </p>
       </div>
+    </div>
+
+    <div v-if="fromNode && destinations.length" class="space-y-2">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-semibold">Getting there</h2>
+        <div class="join" role="tablist">
+          <button
+            class="btn btn-xs join-item"
+            :class="profile === 'transit' ? 'btn-primary' : 'btn-ghost'"
+            @click="profile = 'transit'"
+          >
+            <Icon icon="ph:bus-bold" />
+            Transit
+          </button>
+          <button
+            class="btn btn-xs join-item"
+            :class="profile === 'bike' ? 'btn-primary' : 'btn-ghost'"
+            @click="profile = 'bike'"
+          >
+            <Icon icon="ph:bicycle-bold" />
+            Bike
+          </button>
+          <button
+            class="btn btn-xs join-item"
+            :class="profile === 'walk' ? 'btn-primary' : 'btn-ghost'"
+            @click="profile = 'walk'"
+          >
+            <Icon icon="ph:person-simple-walk-bold" />
+            Walk
+          </button>
+        </div>
+      </div>
+      <RouteCard
+        v-for="to in destinations"
+        :key="to.id + profile"
+        :from="fromNode!"
+        :to="to"
+      />
     </div>
   </section>
 </template>
