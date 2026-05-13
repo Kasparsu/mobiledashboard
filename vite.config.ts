@@ -15,6 +15,7 @@ export default defineConfig({
     vue(),
     tailwindcss(),
     VitePWA({
+      disable: process.env.CAPACITOR === '1',
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'favicon.svg', 'apple-touch-icon-180x180.png'],
       manifest: {
